@@ -17,6 +17,8 @@ fbrowse
 
 ### todo
 
-- [] render a preview text
+- [ ] render a preview text
+
+### looks
 
 ![looks](./shots/shot.png)
