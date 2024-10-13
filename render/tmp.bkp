@@ -1,0 +1,226 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"image/color"
+	"image/png"
+	"io/ioutil"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/opentype"
+	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+)
+
+// FontItem represents a font file with its name and path
+type FontItem struct {
+	name string
+	path string
+}
+
+// Implement the list.Item interface
+func (f FontItem) Title() string {
+	return f.name
+}
+
+func (f FontItem) Description() string {
+	return "The quick brown fox jumps over the lazy dog"
+}
+
+func (f FontItem) FilterValue() string {
+	return f.name
+}
+
+// Global variables for the model
+var (
+	fonts []FontItem
+	fontFace font.Face
+	previewText = "The quick brown fox jumps over the lazy dog"
+)
+
+// Bubble Tea Model
+type model struct {
+	list     list.Model
+	preview  *ebiten.Image // Image to render the preview
+}
+
+// Get available fonts
+func getAvailableFonts(ctx context.Context) []FontItem {
+	fontDirs := []string{
+		"~/.local/share/fonts",
+		"/usr/local/share/fonts",
+		"/usr/share/fonts",
+		"/Library/Fonts",
+		"~/Library/Fonts",
+	}
+
+	var fontItems []FontItem
+	fontChan := make(chan FontItem)
+	doneChan := make(chan struct{})
+
+	go func() {
+		for font := range fontChan {
+			fontItems = append(fontItems, font)
+		}
+		doneChan <- struct{}{}
+	}()
+
+	for _, dir := range fontDirs {
+		go func(d string) {
+			searchFontsInDir(ctx, expandHome(d), fontChan)
+			doneChan <- struct{}{}
+		}(dir)
+	}
+
+	for range fontDirs {
+		<-doneChan
+	}
+
+	close(fontChan)
+	<-doneChan
+
+	return fontItems
+}
+
+// Search for fonts in the directory
+func searchFontsInDir(ctx context.Context, dir string, fontChan chan<- FontItem) {
+	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		select {
+		case <-ctx.Done():
+			return context.Canceled
+		default:
+		}
+
+		if err != nil {
+			return nil
+		}
+		if !d.IsDir() && (strings.HasSuffix(path, ".ttf") || strings.HasSuffix(path, ".otf")) {
+			fontChan <- FontItem{
+				name: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+				path: path,
+			}
+		}
+		return nil
+	})
+}
+
+// Expand home directory path
+func expandHome(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, path[2:])
+	}
+	return path
+}
+
+// LoadFont loads a font from the given path
+func LoadFont(path string) (font.Face, error) {
+	fontData, err := ioutil.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	parsedFont, err := opentype.Parse(fontData)
+	if err != nil {
+		return nil, err
+	}
+	face, err := opentype.NewFace(parsedFont, &opentype.FaceOptions{
+		Size:    24,
+		DPI:     72,
+		Hinting: font.HintingFull,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return face, nil
+}
+
+// Initialize model
+func (m *model) Init() tea.Cmd {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	
+	// Load available fonts
+	fonts = getAvailableFonts(ctx)
+
+	// Initialize the list model
+	items := make([]list.Item, len(fonts))
+	for i, f := range fonts {
+		items[i] = f
+	}
+
+	m.list = list.New(items, list.NewDefaultDelegate(), 0, 0)
+	m.list.Title = "Available Fonts"
+
+	// Load the font for the initial selection
+	if len(fonts) > 0 {
+		m.loadSelectedFont(0) // Load the first font by default
+	}
+
+	return nil
+}
+
+// Load the selected font into fontFace
+func (m *model) loadSelectedFont(index int) {
+	if index < 0 || index >= len(fonts) {
+		return
+	}
+
+	face, err := LoadFont(fonts[index].path)
+	if err != nil {
+		log.Println("Error loading font:", err)
+		return
+	}
+	fontFace = face
+}
+
+// Update Bubble Tea model
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" || msg.String() == "q" {
+			return m, tea.Quit
+		}
+
+		// Update the selected font on key press
+		if msg.String() == "down" {
+			m.list.MoveDown()
+			m.loadSelectedFont(m.list.Index())
+		} else if msg.String() == "up" {
+			m.list.MoveUp()
+			m.loadSelectedFont(m.list.Index())
+		}
+	}
+
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	return m, cmd
+}
+
+// Draw the Ebiten screen
+func (m *model) Draw(screen *ebiten.Image) {
+	// Clear the screen
+	screen.Fill(color.Black)
+
+	// Draw the font preview
+	if fontFace != nil {
+		ebitenutil.DebugPrint(screen, previewText) // Fallback text rendering
+	}
+
+	// Draw the Bubble Tea list
+	list.Render(screen, m.list)
+}
+
+// Main entry point
+func main() {
+	m := &model{}
+	if err := tea.NewProgram(m).Start(); err != nil {
+		log.Fatal(err)
+	}
+}
