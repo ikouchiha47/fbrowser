@@ -4,7 +4,7 @@ Font Browser. On Mac and Linux.
 
 ### why
 
-I use i3 as my setup, and I don't want to install a plethora of gnome and god forbid, qt bloatwares.
+I use i3 as my wm, and I don't want to install a plethora of gnome and god forbid, qt bloatwares.
 
 ### how
 
